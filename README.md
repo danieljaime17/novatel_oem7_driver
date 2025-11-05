@@ -67,6 +67,42 @@ You can then install these via `apt` or `dpkg`:
 sudo apt install ./ros-{$ROS_DISTRO}-novatel-oem7*.deb
 ```
 
+## Standalone USB GPS Monitor
+The repository includes a minimal Python 3 helper that locates a connected GPS receiver on the USB serial ports and streams the raw sentences it receives. It does not depend on any third-party libraries.
+
+```
+python3 src/novatel_oem7_driver/tools/usb_gps_monitor.py
+```
+
+Run the script with the GPS connected. It will scan `/dev/ttyUSB*` and `/dev/ttyACM*`, probe common baud rates, and print the detected data. If no device is found, ensure your user has permission to access the serial port (usually by being a member of the `dialout` group on Ubuntu).
+
+### USB GPS Init + Monitor
+Run a single script to send a minimal initialization sequence and immediately stream the receiver output:
+
+```
+python3 src/novatel_oem7_driver/tools/gps_run.py
+```
+
+It defaults to `/dev/ttyUSB1` at 115200 baud, printing any NMEA-style lines it receives. Use `--nmea-only` to filter the output, or `--no-init` if you only want to monitor.
+
+### USB GPS Initializer
+To replay the full NovAtel initialization commands from the driver configuration, use:
+
+```
+python3 src/novatel_oem7_driver/tools/gps_init.py
+```
+
+The script loads the command sequences from `config/std_init_commands.yaml` and `config/ext_parameteres.yaml`, writes them to the serial port, and prints any responses. Options such as `--port`, `--baud`, `--timeout`, or `--list-only` are available; run with `-h` for details.
+
+## ROS2 Bag Analyzer
+`src/novatel_oem7_driver/test/oem7_message_test.py` now targets ROS 2 Humble. Source your ROS 2 environment (for example `source /opt/ros/humble/setup.bash`) and point it at a rosbag2 recording:
+
+```
+python3 -c "import oem7_message_test as omt; omt.analyze_hz('path/to/bag_directory', output_csv=False)"
+```
+
+If the bag resides under `~/.ros`, you can pass just the directory name. Setting `output_csv=True` writes CSV summaries alongside the recording.
+
 ## Next Steps
 Refer to the novatel_oem7_driver documentation in the ROS wiki for more information:
 http://wiki.ros.org/novatel_oem7_driver
@@ -80,5 +116,3 @@ http://wiki.ros.org/novatel_oem7_driver
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
-
-

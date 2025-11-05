@@ -25,35 +25,95 @@
 Message Hz analysis.
 
 Existing ros_comm hz tests anaylyzes a single topic at a time;
-This script analyzes multiple topics in a Bag.
+This script analyzes multiple topics in a ROS 2 bag.
 """
 
 import os
-import traceback
-
 import numpy as np
 
-import rosbag
-from docutils.nodes import topic
+from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
 
+
+
+def resolve_bag_uri(bag_name):
+    """
+    Determine the rosbag2 storage URI (directory) for the requested bag.
+    """
+    expanded = os.path.abspath(os.path.expanduser(bag_name))
+    default_root = os.path.abspath(os.path.expanduser("~/.ros"))
+
+    candidates = [
+        expanded,
+        os.path.join(default_root, bag_name),
+    ]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        candidate = os.path.abspath(candidate)
+
+        if os.path.isdir(candidate):
+            metadata = os.path.join(candidate, "metadata.yaml")
+            if os.path.isfile(metadata):
+                return candidate
+
+        if candidate.endswith(".db3") and os.path.isfile(candidate):
+            return os.path.dirname(candidate)
+
+        db3 = candidate + ".db3"
+        if os.path.isfile(db3):
+            return os.path.dirname(db3)
+
+    raise FileNotFoundError("Unable to locate bag '{}' (checked: {})".format(
+        bag_name,
+        ", ".join(candidates)))
+
+
+def open_rosbag2_reader(bag_name):
+    uri = resolve_bag_uri(bag_name)
+    storage_options = StorageOptions(uri=uri, storage_id="sqlite3")
+    converter_options = ConverterOptions(
+        input_serialization_format="cdr",
+        output_serialization_format="cdr",
+    )
+    reader = SequentialReader()
+    reader.open(storage_options, converter_options)
+    topics = {t.name: t.type for t in reader.get_all_topics_and_types()}
+    return reader, topics
 
 
 def get_topic_list(bag_name):
-    """ Return a list of topics stored in this bag """
-    bag = rosbag.Bag(bag_name, 'r')
-    return bag.get_type_and_topic_info()[1].keys()
+    """Return list of topics stored in this bag."""
+    _, topics = open_rosbag2_reader(bag_name)
+    return list(topics.keys())
 
 def make_msg_gen(bag_name, topic):
     """ Generates a sequence of messages in the topic from the bag """
-    bag = rosbag.Bag(bag_name, 'r')
-    for top, msg, time in bag.read_messages():
-        if top == topic:
-            yield time, msg
+    reader, topic_types = open_rosbag2_reader(bag_name)
+    if topic not in topic_types:
+        return
+
+    msg_cls = get_message(topic_types[topic])
+    while reader.has_next():
+        top, data, ts = reader.read_next()
+        if top != topic:
+            continue
+        msg = deserialize_message(data, msg_cls)
+        yield ts, msg
 
     
 def make_timestamp_gen(msg_itr):
     for t, m in msg_itr:
-        yield t.to_sec(), m.header.stamp.to_sec()
+        bag_ts = float(t) * 1e-9
+        header = getattr(m, "header", None)
+        if header is None or not hasattr(header, "stamp"):
+            raise AttributeError("Message does not contain header stamp needed for timing analysis.")
+        stamp = header.stamp
+        msg_ts = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        yield bag_ts, msg_ts
 
 
      
@@ -63,10 +123,7 @@ def analyze_topic_hz(name, topic, exp_int, output_csv):
   Analyzes message interval for a particular topic.
   """
 
-  bag_name = name + ".bag"
-  bag_path = os.path.expanduser("~") + "/.ros/" + bag_name
-
-  msg_gen      = make_msg_gen(bag_path, topic)
+  msg_gen      = make_msg_gen(name, topic)
   ts_gen       = make_timestamp_gen(msg_gen)
   
   # Array of timestamps: Bag ts (recording time), Message ts (generation time), Delta: rec ts - gen ts
@@ -104,8 +161,9 @@ def analyze_topic_hz(name, topic, exp_int, output_csv):
   
   if output_csv:
       # Dump into .csv for additional post-processing.
+      bag_label = os.path.basename(resolve_bag_uri(name))
       topic_filename = topic.replace("/", "_")
-      np.savetxt(name + "." + topic_filename + ".csv", int_arr, delimiter=",")
+      np.savetxt(bag_label + "." + topic_filename + ".csv", int_arr, delimiter=",")
 
   
 """
@@ -141,7 +199,5 @@ def analyze_hz(bag_name, output_csv):
     
     for topic in topic_config:
         analyze_topic_hz(bag_name, topic, topic_config[topic], output_csv)
-        print ""
+        print("")
         
-
-
